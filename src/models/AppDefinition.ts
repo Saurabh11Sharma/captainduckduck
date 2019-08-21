@@ -49,6 +49,7 @@ interface IAppCustomDomain {
 }
 
 interface IAppDefinitionBase {
+    description: string
     deployedVersion: number
     notExposeAsWebApp: boolean
     hasPersistentData: boolean
@@ -56,6 +57,7 @@ interface IAppDefinitionBase {
     containerHttpPort?: number
     captainDefinitionRelativeFilePath: string
     forceSsl: boolean
+    websocketSupport: boolean
     nodeId?: string
     instanceCount: number
     preDeployFunction?: string
@@ -69,32 +71,34 @@ interface IAppDefinitionBase {
     versions: IAppVersion[]
 }
 
+interface IHttpAuth {
+    user: string
+    password?: string
+    passwordHashed?: string
+}
+
 interface IAppDef extends IAppDefinitionBase {
     appPushWebhook?: {
         tokenVersion: string
         repoInfo: RepoInfo
         pushWebhookToken: string
     }
-    httpAuth?: {
-        user: string
-        password?: string
-        passwordHashed?: string
-    }
+    httpAuth?: IHttpAuth
     appName?: string
     isAppBuilding?: boolean
 }
 
 interface IAppDefSaved extends IAppDefinitionBase {
     appPushWebhook:
-        | {
-              tokenVersion: string
-              repoInfo: RepoInfoEncrypted
-              pushWebhookToken: string
-          }
-        | undefined
+    | {
+        tokenVersion: string
+        repoInfo: RepoInfoEncrypted
+        pushWebhookToken: string
+    }
+    | undefined
 
     httpAuth?: {
         user: string
-        passwordHashed?: string
+        passwordHashed: string
     }
 }

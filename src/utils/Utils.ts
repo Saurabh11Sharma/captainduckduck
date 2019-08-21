@@ -25,6 +25,8 @@ export default class Utils {
     }
 
     static getDelayedPromise(time: number) {
+        if (!time) return Promise.resolve()
+
         return new Promise<void>((res, rej) => {
             setTimeout(() => {
                 res()
@@ -36,6 +38,21 @@ export default class Utils {
         return new Promise((res, rej) => {
             //
         })
+    }
+
+    static filterInPlace<T>(arr: T[], condition: (value: T) => boolean) {
+        let newArray = arr.filter(condition)
+        arr.splice(0, arr.length)
+        newArray.forEach(value => arr.push(value))
+    }
+
+    static dropFirstElements(arr: any[], maxLength: number) {
+        arr = arr || []
+        maxLength = Number(maxLength)
+
+        if (arr.length <= maxLength) return arr
+
+        return arr.slice(arr.length - maxLength)
     }
 
     static runPromises(

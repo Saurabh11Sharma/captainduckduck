@@ -1,11 +1,12 @@
 import express = require('express')
 import fs = require('fs')
-import BaseApi = require('../../api/BaseApi')
-import ApiStatusCodes = require('../../api/ApiStatusCodes')
-import Logger = require('../../utils/Logger')
-import CaptainConstants = require('../../utils/CaptainConstants')
-import { CaptainError } from '../../models/OtherTypes'
-import InjectionExtractor = require('../../injection/InjectionExtractor')
+import BaseApi = require('../../../../api/BaseApi')
+import ApiStatusCodes = require('../../../../api/ApiStatusCodes')
+import Logger = require('../../../../utils/Logger')
+import CaptainConstants = require('../../../../utils/CaptainConstants')
+import { CaptainError } from '../../../../models/OtherTypes'
+import InjectionExtractor = require('../../../../injection/InjectionExtractor')
+import Utils from '../../../../utils/Utils'
 
 const router = express.Router()
 
@@ -236,8 +237,9 @@ router.post('/register/', function(req, res, next) {
     const serviceManager = InjectionExtractor.extractUserFromInjected(res).user
         .serviceManager
 
-    let appName = req.body.appName as string
-    let hasPersistentData = !!req.body.hasPersistentData
+    const appName = req.body.appName as string
+    const hasPersistentData = !!req.body.hasPersistentData
+    const isDetachedBuild = !!req.query.detached
 
     let appCreated = false
 
@@ -250,12 +252,17 @@ router.post('/register/', function(req, res, next) {
             appCreated = true
         })
         .then(function() {
-            return serviceManager.deployNewVersion(appName, {
-                captainDefinitionContentSource: {
-                    captainDefinitionContent: DEFAULT_APP_CAPTAIN_DEFINITION,
-                    gitHash: '',
-                },
-            })
+            const promiseToIgnore = serviceManager.scheduleDeployNewVersion(
+                appName,
+                {
+                    captainDefinitionContentSource: {
+                        captainDefinitionContent: DEFAULT_APP_CAPTAIN_DEFINITION,
+                        gitHash: '',
+                    },
+                }
+            )
+
+            if (!isDetachedBuild) return promiseToIgnore
         })
         .then(function() {
             Logger.d('AppName is saved: ' + appName)
@@ -291,6 +298,7 @@ router.post('/delete/', function(req, res, next) {
         .serviceManager
 
     let appName = req.body.appName
+    let volumes = req.body.volumes || []
 
     Logger.d('Deleting app started: ' + appName)
 
@@ -299,8 +307,51 @@ router.post('/delete/', function(req, res, next) {
             return serviceManager.removeApp(appName)
         })
         .then(function() {
+            return Utils.getDelayedPromise(volumes.length ? 12000 : 0)
+        })
+        .then(function() {
+            return serviceManager.removeVolsSafe(volumes)
+        })
+        .then(function(failedVolsToRemoved) {
             Logger.d('AppName is deleted: ' + appName)
-            res.send(new BaseApi(ApiStatusCodes.STATUS_OK, 'App is deleted'))
+
+            if (failedVolsToRemoved.length) {
+                const returnVal = new BaseApi(
+                    ApiStatusCodes.STATUS_OK_PARTIALLY,
+                    'App is deleted. Some volumes were not safe to delete. Delete skipped for: ' +
+                        failedVolsToRemoved.join(' , ')
+                )
+                returnVal.data = { volumesFailedToDelete: failedVolsToRemoved }
+                res.send(returnVal)
+            } else {
+                res.send(
+                    new BaseApi(ApiStatusCodes.STATUS_OK, 'App is deleted')
+                )
+            }
+        })
+        .catch(ApiStatusCodes.createCatcher(res))
+})
+
+router.post('/rename/', function(req, res, next) {
+    const dataStore = InjectionExtractor.extractUserFromInjected(res).user
+        .dataStore
+    const serviceManager = InjectionExtractor.extractUserFromInjected(res).user
+        .serviceManager
+
+    let oldAppName = req.body.oldAppName + ''
+    let newAppName = req.body.newAppName + ''
+
+    Logger.d(`Renaming app started: From ${oldAppName} To ${newAppName} `)
+
+    Promise.resolve()
+        .then(function() {
+            return serviceManager.renameApp(oldAppName, newAppName)
+        })
+        .then(function() {
+            Logger.d('AppName is renamed')
+            res.send(
+                new BaseApi(ApiStatusCodes.STATUS_OK, 'AppName is renamed')
+            )
         })
         .catch(ApiStatusCodes.createCatcher(res))
 })
@@ -318,6 +369,7 @@ router.post('/update/', function(req, res, next) {
     let notExposeAsWebApp = req.body.notExposeAsWebApp
     let customNginxConfig = req.body.customNginxConfig
     let forceSsl = !!req.body.forceSsl
+    let websocketSupport = !!req.body.websocketSupport
     let repoInfo = !!req.body.appPushWebhook
         ? req.body.appPushWebhook.repoInfo || {}
         : {}
@@ -327,6 +379,8 @@ router.post('/update/', function(req, res, next) {
     let instanceCount = req.body.instanceCount || '0'
     let preDeployFunction = req.body.preDeployFunction || ''
     let containerHttpPort = Number(req.body.containerHttpPort) || 80
+    let httpAuth = req.body.httpAuth
+    let description = req.body.description || ''
 
     if (repoInfo.user) {
         repoInfo.user = repoInfo.user.trim()
@@ -343,6 +397,7 @@ router.post('/update/', function(req, res, next) {
     serviceManager
         .updateAppDefinition(
             appName,
+            description,
             Number(instanceCount),
             captainDefinitionRelativeFilePath,
             envVars,
@@ -350,11 +405,13 @@ router.post('/update/', function(req, res, next) {
             nodeId,
             notExposeAsWebApp,
             containerHttpPort,
+            httpAuth,
             forceSsl,
             ports,
             repoInfo,
             customNginxConfig,
-            preDeployFunction
+            preDeployFunction,
+            websocketSupport
         )
         .then(function() {
             Logger.d('AppName is updated: ' + appName)

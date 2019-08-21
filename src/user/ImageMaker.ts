@@ -52,13 +52,30 @@ const RAW_SOURCE_DIRECTORY = 'source_files'
 const TAR_FILE_NAME_READY_FOR_DOCKER = 'image.tar'
 const DOCKER_FILE = 'Dockerfile'
 
+export class BuildLogsManager {
+    private buildLogs: IHashMapGeneric<BuildLog>
+
+    constructor() {
+        this.buildLogs = {}
+    }
+
+    getAppBuildLogs(appName: string) {
+        const self = this
+
+        self.buildLogs[appName] =
+            self.buildLogs[appName] ||
+            new BuildLog(CaptainConstants.configs.buildLogSize)
+
+        return self.buildLogs[appName]
+    }
+}
+
 export default class ImageMaker {
     constructor(
         private dockerRegistryHelper: DockerRegistryHelper,
         private dockerApi: DockerApi,
         private namespace: string,
-        private buildLogs: IHashMapGeneric<BuildLog>,
-        private activeBuilds: IHashMapGeneric<boolean>
+        private buildLogsManager: BuildLogsManager
     ) {
         //
     }
@@ -84,14 +101,11 @@ export default class ImageMaker {
     ): Promise<IBuiltImage> {
         const self = this
 
-        this.activeBuilds[appName] = true
-        this.buildLogs[appName] =
-            this.buildLogs[appName] ||
-            new BuildLog(CaptainConstants.configs.buildLogSize)
+        const logs = self.buildLogsManager.getAppBuildLogs(appName)
 
-        this.buildLogs[appName].clear()
-        this.buildLogs[appName].log('------------------------- ' + new Date())
-        this.buildLogs[appName].log('Build started for ' + appName)
+        logs.clear()
+        logs.log('------------------------- ' + new Date())
+        logs.log('Build started for ' + appName)
 
         let gitHash = ''
 
@@ -100,7 +114,7 @@ export default class ImageMaker {
         const tarFilePath = baseDir + '/' + TAR_FILE_NAME_READY_FOR_DOCKER
 
         const baseImageNameWithoutVerAndReg =
-            'img-' + this.namespace + '--' + appName // img-captain--myapp
+            'img-' + this.namespace + '-' + appName // img-captain-myapp
         let fullImageName = '' // repo.domain.com:998/username/reponame:8
 
         return Promise.resolve() //
@@ -126,13 +140,13 @@ export default class ImageMaker {
                     .getCaptainDefinition(captainDefinitionAbsolutePath)
                     .then(function(captainDefinition) {
                         if (captainDefinition.imageName) {
-                            self.buildLogs[appName].log(
+                            logs.log(
                                 `An explicit image name was provided (${
                                     captainDefinition.imageName
                                 }). Therefore, no build process is needed.`
                             )
 
-                            self.buildLogs[appName].log(
+                            logs.log(
                                 `Pulling this image: ${
                                     captainDefinition.imageName
                                 } This process might take a few minutes.`
@@ -207,16 +221,14 @@ export default class ImageMaker {
                 return Promise.reject(err)
             })
             .then(function() {
-                self.activeBuilds[appName] = false
-                self.buildLogs[appName].log(`Build has finished successfully!`)
+                logs.log(`Build has finished successfully!`)
                 return {
                     imageName: fullImageName,
                     gitHash: gitHash,
                 }
             })
             .catch(function(error) {
-                self.activeBuilds[appName] = false
-                self.buildLogs[appName].log(`Build has failed!`)
+                logs.log(`Build has failed!`)
                 return Promise.reject(error)
             })
     }
@@ -249,7 +261,7 @@ export default class ImageMaker {
                                 baseImageNameWithoutVersionAndReg,
                                 appVersion,
                                 tarFilePath,
-                                self.buildLogs[appName]
+                                self.buildLogsManager.getAppBuildLogs(appName)
                             )
                             .catch(function(error: AnyError) {
                                 throw ApiStatusCodes.createError(
@@ -262,7 +274,7 @@ export default class ImageMaker {
                         return self.dockerRegistryHelper.retagAndPushIfDefaultPushExist(
                             baseImageNameWithoutVersionAndReg,
                             appVersion,
-                            self.buildLogs[appName]
+                            self.buildLogsManager.getAppBuildLogs(appName)
                         )
                     })
             })

@@ -8,11 +8,23 @@ import requireFromString = require('require-from-string')
 import BuildLog = require('./BuildLog')
 import { ImageInfo } from 'dockerode'
 import DockerRegistryHelper = require('./DockerRegistryHelper')
-import ImageMaker from './ImageMaker'
+import ImageMaker, { BuildLogsManager } from './ImageMaker'
 import DomainResolveChecker from './system/DomainResolveChecker'
 import Authenticator = require('./Authenticator')
 
 const serviceMangerCache = {} as IHashMapGeneric<ServiceManager>
+
+interface QueuedPromise {
+    resolve: undefined | ((reason?: unknown) => void)
+    reject: undefined | ((reason?: any) => void)
+    promise: undefined | (Promise<unknown>)
+}
+
+interface QueuedBuild {
+    appName: string
+    source: IImageSource
+    promiseToSave: QueuedPromise
+}
 
 class ServiceManager {
     static get(
@@ -35,8 +47,9 @@ class ServiceManager {
         return serviceMangerCache[namespace]
     }
 
-    private activeBuilds: IHashMapGeneric<boolean>
-    private buildLogs: IHashMapGeneric<BuildLog>
+    private activeOrScheduledBuilds: IHashMapGeneric<boolean>
+    private buildLogsManager: BuildLogsManager
+    private queuedBuilds: QueuedBuild[]
     private isReady: boolean
     private imageMaker: ImageMaker
     private dockerRegistryHelper: DockerRegistryHelper
@@ -48,8 +61,9 @@ class ServiceManager {
         private loadBalancerManager: LoadBalancerManager,
         private domainResolveChecker: DomainResolveChecker
     ) {
-        this.activeBuilds = {}
-        this.buildLogs = {}
+        this.activeOrScheduledBuilds = {}
+        this.queuedBuilds = []
+        this.buildLogsManager = new BuildLogsManager()
         this.isReady = true
         this.dockerRegistryHelper = new DockerRegistryHelper(
             this.dataStore,
@@ -59,8 +73,7 @@ class ServiceManager {
             this.dockerRegistryHelper,
             this.dockerApi,
             this.dataStore.getNameSpace(),
-            this.buildLogs,
-            this.activeBuilds
+            this.buildLogsManager
         )
     }
 
@@ -72,10 +85,74 @@ class ServiceManager {
         return this.isReady
     }
 
-    deployNewVersion(appName: string, source: IImageSource) {
+    scheduleDeployNewVersion(appName: string, source: IImageSource) {
+        const self = this
+
+        let activeBuildAppName = self.isAnyBuildRunning()
+        this.activeOrScheduledBuilds[appName] = true
+
+        self.buildLogsManager.getAppBuildLogs(appName).clear()
+
+        if (activeBuildAppName) {
+            const existingBuildForTheSameApp = self.queuedBuilds.find(
+                v => v.appName === appName
+            )
+
+            if (existingBuildForTheSameApp) {
+                self.buildLogsManager
+                    .getAppBuildLogs(appName)
+                    .log(
+                        `A build for ${appName} was queued, it's now being replaced with a new build...`
+                    )
+
+                // replacing the new source!
+                existingBuildForTheSameApp.source = source
+
+                const existingPromise =
+                    existingBuildForTheSameApp.promiseToSave.promise
+
+                if (!existingPromise)
+                    throw new Error(
+                        'Existing promise for the queued app is NULL!!'
+                    )
+
+                return existingPromise
+            }
+
+            self.buildLogsManager
+                .getAppBuildLogs(appName)
+                .log(
+                    `An active build (${activeBuildAppName}) is in progress. This build is queued...`
+                )
+
+            let promiseToSave: QueuedPromise = {
+                resolve: undefined,
+                reject: undefined,
+                promise: undefined,
+            }
+
+            let promise = new Promise(function(resolve, reject) {
+                promiseToSave.resolve = resolve
+                promiseToSave.reject = reject
+            })
+
+            promiseToSave.promise = promise
+
+            self.queuedBuilds.push({ appName, source, promiseToSave })
+
+            // This should only return when the build is finished,
+            // somehow we need save the promise in queue - for "attached builds"
+            return promise
+        }
+
+        return this.startDeployingNewVersion(appName, source)
+    }
+
+    startDeployingNewVersion(appName: string, source: IImageSource) {
         const self = this
         const dataStore = this.dataStore
         let deployedVersion: number
+
         return Promise.resolve() //
             .then(function() {
                 return dataStore.getAppsDataStore().createNewVersion(appName)
@@ -104,14 +181,27 @@ class ServiceManager {
                     )
             })
             .then(function() {
+                self.onBuildFinished(appName)
                 return self.ensureServiceInitedAndUpdated(appName)
             })
             .catch(function(error) {
+                self.onBuildFinished(appName)
                 return new Promise<void>(function(resolve, reject) {
                     self.logBuildFailed(appName, error)
                     reject(error)
                 })
             })
+    }
+
+    onBuildFinished(appName: string) {
+        const self = this
+        self.activeOrScheduledBuilds[appName] = false
+
+        Promise.resolve().then(function() {
+            let newBuild = self.queuedBuilds.shift()
+            if (newBuild)
+                self.startDeployingNewVersion(newBuild.appName, newBuild.source)
+        })
     }
 
     enableCustomDomainSsl(appName: string, customDomain: string) {
@@ -298,6 +388,55 @@ class ServiceManager {
             })
     }
 
+    renameApp(oldAppName: string, newAppName: string) {
+        Logger.d('Renaming app: ' + oldAppName)
+        const self = this
+
+        const oldServiceName = this.dataStore
+            .getAppsDataStore()
+            .getServiceName(oldAppName)
+        const dockerApi = this.dockerApi
+        const dataStore = this.dataStore
+
+        let defaultSslOn = false
+
+        return Promise.resolve()
+            .then(function() {
+                return dataStore.getAppsDataStore().getAppDefinition(oldAppName)
+            })
+            .then(function(appDef) {
+                defaultSslOn = !!appDef.hasDefaultSubDomainSsl
+
+                dataStore.getAppsDataStore().nameAllowedOrThrow(newAppName)
+
+                return self.ensureNotBuilding(oldAppName)
+            })
+            .then(function() {
+                Logger.d('Check if service is running: ' + oldServiceName)
+                return dockerApi.isServiceRunningByName(oldServiceName)
+            })
+            .then(function(isRunning) {
+                if (!isRunning) {
+                    throw ApiStatusCodes.createError(
+                        ApiStatusCodes.STATUS_ERROR_GENERIC,
+                        'Service is not running!'
+                    )
+                }
+                return dockerApi.removeServiceByName(oldServiceName)
+            })
+            .then(function() {
+                return dataStore
+                    .getAppsDataStore()
+                    .renameApp(oldAppName, newAppName)
+            })
+            .then(function() {
+                return self.ensureServiceInitedAndUpdated(newAppName)
+            })
+            .then(function() {
+                if (defaultSslOn) return self.enableSslForApp(newAppName)
+            })
+    }
+
     removeApp(appName: string) {
         Logger.d('Removing service for: ' + appName)
         const self = this
@@ -309,6 +448,9 @@ class ServiceManager {
         const dataStore = this.dataStore
 
         return Promise.resolve()
+            .then(function() {
+                return self.ensureNotBuilding(appName)
+            })
             .then(function() {
                 Logger.d('Check if service is running: ' + serviceName)
                 return dockerApi.isServiceRunningByName(serviceName)
@@ -329,6 +471,54 @@ class ServiceManager {
             })
             .then(function() {
                 return self.reloadLoadBalancer()
+            })
+    }
+
+    removeVolsSafe(volumes: string[]) {
+        const self = this
+
+        const dockerApi = this.dockerApi
+        const dataStore = this.dataStore
+
+        const volsFailedToDelete: IHashMapGeneric<boolean> = {}
+
+        return Promise.resolve()
+            .then(function() {
+                return dataStore.getAppsDataStore().getAppDefinitions()
+            })
+            .then(function(apps) {
+                // Don't even try deleting volumes which are present in other app definitions
+                Object.keys(apps).forEach(appName => {
+                    const app = apps[appName]
+                    const volsInApp = app.volumes || []
+
+                    volsInApp.forEach(v => {
+                        const volName = v.volumeName
+                        if (!volName) return
+                        if (volumes.indexOf(volName) >= 0) {
+                            volsFailedToDelete[volName] = true
+                        }
+                    })
+                })
+
+                const volumesTryToDelete: string[] = []
+
+                volumes.forEach(v => {
+                    if (!volsFailedToDelete[v]) {
+                        volumesTryToDelete.push(
+                            dataStore.getAppsDataStore().getVolumeName(v)
+                        )
+                    }
+                })
+
+                return dockerApi.deleteVols(volumesTryToDelete)
+            })
+            .then(function(failedVols) {
+                failedVols.forEach(v => {
+                    volsFailedToDelete[v] = true
+                })
+
+                return Object.keys(volsFailedToDelete)
             })
     }
 
@@ -363,10 +553,10 @@ class ServiceManager {
                 }
 
                 for (let i = 0; i < allImages.length; i++) {
-                    const img = allImages[i]
+                    const currentImage = allImages[i]
                     let imageInUse = false
 
-                    const repoTags = img.RepoTags || []
+                    const repoTags = currentImage.RepoTags || []
 
                     Object.keys(apps).forEach(function(key, index) {
                         const app = apps[key]
@@ -394,7 +584,7 @@ class ServiceManager {
 
                     if (!imageInUse) {
                         unusedImages.push({
-                            id: img.Id,
+                            id: currentImage.Id,
                             tags: repoTags,
                         })
                     }
@@ -443,8 +633,17 @@ class ServiceManager {
         return requireFromString(preDeployFunction)
     }
 
+    ensureNotBuilding(appName: string) {
+        if (this.activeOrScheduledBuilds[appName])
+            throw ApiStatusCodes.createError(
+                ApiStatusCodes.ILLEGAL_OPERATION,
+                `Build in-progress for ${appName}. Please wait...`
+            )
+    }
+
     updateAppDefinition(
         appName: string,
+        description: string,
         instanceCount: number,
         captainDefinitionRelativeFilePath: string,
         envVars: IAppEnvVar[],
@@ -452,11 +651,13 @@ class ServiceManager {
         nodeId: string,
         notExposeAsWebApp: boolean,
         containerHttpPort: number,
+        httpAuth: IHttpAuth,
         forceSsl: boolean,
         ports: IAppPort[],
         repoInfo: RepoInfo,
         customNginxConfig: string,
-        preDeployFunction: string
+        preDeployFunction: string,
+        websocketSupport: boolean
     ) {
         const self = this
         const dataStore = this.dataStore
@@ -481,6 +682,9 @@ class ServiceManager {
         }
 
         return Promise.resolve()
+            .then(function() {
+                return self.ensureNotBuilding(appName)
+            })
             .then(function() {
                 return dataStore.getAppsDataStore().getAppDefinition(appName)
             })
@@ -541,6 +745,7 @@ class ServiceManager {
                     .getAppsDataStore()
                     .updateAppDefinitionInDb(
                         appName,
+                        description,
                         instanceCount,
                         captainDefinitionRelativeFilePath,
                         envVars,
@@ -548,12 +753,14 @@ class ServiceManager {
                         nodeId,
                         notExposeAsWebApp,
                         containerHttpPort,
+                        httpAuth,
                         forceSsl,
                         ports,
                         repoInfo,
                         self.authenticator,
                         customNginxConfig,
-                        preDeployFunction
+                        preDeployFunction,
+                        websocketSupport
                     )
             })
             .then(function() {
@@ -565,7 +772,7 @@ class ServiceManager {
     }
 
     isAppBuilding(appName: string) {
-        return !!this.activeBuilds[appName]
+        return !!this.activeOrScheduledBuilds[appName]
     }
 
     /**
@@ -573,7 +780,7 @@ class ServiceManager {
      * @returns the active build that it finds
      */
     isAnyBuildRunning() {
-        const activeBuilds = this.activeBuilds
+        const activeBuilds = this.activeOrScheduledBuilds
 
         for (const appName in activeBuilds) {
             if (!!activeBuilds[appName]) {
@@ -586,23 +793,18 @@ class ServiceManager {
 
     getBuildStatus(appName: string) {
         const self = this
-        this.buildLogs[appName] =
-            this.buildLogs[appName] ||
-            new BuildLog(CaptainConstants.configs.buildLogSize)
 
         return {
             isAppBuilding: self.isAppBuilding(appName),
-            logs: self.buildLogs[appName].getLogs(),
-            isBuildFailed: self.buildLogs[appName].isBuildFailed,
+            logs: self.buildLogsManager.getAppBuildLogs(appName).getLogs(),
+            isBuildFailed: self.buildLogsManager.getAppBuildLogs(appName)
+                .isBuildFailed,
         }
     }
 
     logBuildFailed(appName: string, error: string) {
         error = (error || '') + ''
-        this.buildLogs[appName] =
-            this.buildLogs[appName] ||
-            new BuildLog(CaptainConstants.configs.buildLogSize)
-        this.buildLogs[appName].onBuildFailed(error)
+        this.buildLogsManager.getAppBuildLogs(appName).onBuildFailed(error)
     }
 
     getAppLogs(appName: string, encoding: string) {

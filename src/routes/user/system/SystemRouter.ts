@@ -1,16 +1,16 @@
 import express = require('express')
-import BaseApi = require('../../api/BaseApi')
-import ApiStatusCodes = require('../../api/ApiStatusCodes')
-import Logger = require('../../utils/Logger')
-import CaptainManager = require('../../user/system/CaptainManager')
+import BaseApi = require('../../../api/BaseApi')
+import ApiStatusCodes = require('../../../api/ApiStatusCodes')
+import Logger = require('../../../utils/Logger')
+import CaptainManager = require('../../../user/system/CaptainManager')
 import Validator = require('validator')
-import SystemRouteSelfHostRegistry = require('./SystemRouteSelfHostRegistry')
-import CaptainConstants = require('../../utils/CaptainConstants')
-import InjectionExtractor = require('../../injection/InjectionExtractor')
-import Utils from '../../utils/Utils'
+import SystemRouteSelfHostRegistry = require('./selfhostregistry/SystemRouteSelfHostRegistry')
+import CaptainConstants = require('../../../utils/CaptainConstants')
+import InjectionExtractor = require('../../../injection/InjectionExtractor')
+import Utils from '../../../utils/Utils'
 import * as path from 'path'
-import DockerUtils from '../../docker/DockerUtils'
-import DockerApi from '../../docker/DockerApi'
+import DockerUtils from '../../../docker/DockerUtils'
+import DockerApi from '../../../docker/DockerApi'
 
 const router = express.Router()
 
@@ -88,6 +88,12 @@ router.post('/enablessl/', function(req, res, next) {
 
     CaptainManager.get()
         .enableSsl(emailAddress)
+        .then(function() {
+            // This is necessary as the CLI immediately tries to connect to https://captain.root.com
+            // Without this delay it'll fail to connect
+            Logger.d('Waiting for 7 seconds...')
+            return Utils.getDelayedPromise(7000)
+        })
         .then(function() {
             res.send(new BaseApi(ApiStatusCodes.STATUS_OK, 'Root SSL Enabled.'))
         })

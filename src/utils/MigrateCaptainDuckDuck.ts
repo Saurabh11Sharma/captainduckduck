@@ -321,6 +321,7 @@ export default class MigrateCaptainDuckDuck {
                                 .then(function() {
                                     return appStore.updateAppDefinitionInDb(
                                         appName,
+                                        '',
                                         Number(app.instanceCount),
                                         CaptainConstants.defaultCaptainDefinitionPath,
                                         app.envVars || [],
@@ -328,12 +329,14 @@ export default class MigrateCaptainDuckDuck {
                                         app.nodeId || '',
                                         !!app.notExposeAsWebApp,
                                         80,
+                                        undefined,
                                         !!app.forceSsl,
                                         app.ports || [],
                                         repoInfo,
                                         self.authenticator,
                                         app.customNginxConfig,
-                                        app.preDeployFunction
+                                        app.preDeployFunction,
+                                        false,
                                     )
                                 })
                         })

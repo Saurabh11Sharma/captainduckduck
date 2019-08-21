@@ -28,9 +28,10 @@ class ApiStatusCodes {
         }
     }
 
-    static readonly STATUS_OK_DEPLOY_STARTED = 101
     static readonly STATUS_ERROR_GENERIC = 1000
     static readonly STATUS_OK = 100
+    static readonly STATUS_OK_DEPLOY_STARTED = 101
+    static readonly STATUS_OK_PARTIALLY = 102
     static readonly STATUS_ERROR_CAPTAIN_NOT_INITIALIZED = 1001
     static readonly STATUS_ERROR_USER_NOT_INITIALIZED = 1101
     static readonly STATUS_ERROR_NOT_AUTHORIZED = 1102
@@ -44,6 +45,7 @@ class ApiStatusCodes {
     static readonly ILLEGAL_PARAMETER = 1110
     static readonly NOT_FOUND = 1111
     static readonly AUTHENTICATION_FAILED = 1112
+    static readonly STATUS_PASSWORD_BACK_OFF = 1113
 }
 
 export = ApiStatusCodes

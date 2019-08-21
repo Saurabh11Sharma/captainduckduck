@@ -11,6 +11,7 @@ import {
     VolumesTypes,
 } from '../models/OtherTypes'
 import DockerService from '../models/DockerService'
+import Utils from '../utils/Utils'
 
 const Base64 = Base64Provider.Base64
 
@@ -462,6 +463,7 @@ class DockerApi {
         network: string,
         arrayOfEnvKeyAndValue: IAppEnvVar[],
         addedCapabilities: string[],
+        addedSecOptions: string[],
         authObj: DockerAuthObj | undefined
     ) {
         const self = this
@@ -499,6 +501,7 @@ class DockerApi {
                     HostConfig: {
                         Binds: volumesMapped,
                         CapAdd: addedCapabilities,
+                        SecurityOpt: addedSecOptions,
                         NetworkMode: network,
                         LogConfig: {
                             Type: 'json-file',
@@ -750,6 +753,30 @@ class DockerApi {
     removeServiceByName(serviceName: string) {
         const self = this
         return self.dockerode.getService(serviceName).remove()
+    }
+
+    deleteVols(vols: string[]) {
+        const self = this
+
+        const promises: (() => Promise<void>)[] = []
+        const failedVols: string[] = []
+
+        vols.forEach(v => {
+            promises.push(function() {
+                return self.dockerode
+                    .getVolume(v) //
+                    .remove() // { force: true }
+                    .catch(err => {
+                        Logger.d(err)
+                        failedVols.push(v)
+                    })
+            })
+        })
+
+        return Utils.runPromises(promises) //
+            .then(function() {
+                return failedVols
+            })
     }
 
     isServiceRunningByName(serviceName: string) {
@@ -1487,9 +1514,8 @@ class DockerApi {
         const self = this
         return Promise.resolve() //
             .then(function() {
-                // TODO REMOVE any once dockerode definition is fixed.
-                // https://github.com/DefinitelyTyped/DefinitelyTyped/pull/32508
-                return (self.dockerode.getService(serviceName) as any) //
+                return self.dockerode
+                    .getService(serviceName) //
                     .logs({
                         tail: tailCount,
                         follow: false,

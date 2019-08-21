@@ -7,6 +7,7 @@ import Authenticator = require('../user/Authenticator')
 import { CaptainEncryptor } from '../utils/Encryptor'
 import { IBuiltImage } from '../models/IBuiltImage'
 import Utils from '../utils/Utils'
+import ApacheMd5 from '../utils/ApacheMd5'
 
 const isValidPath = require('is-valid-path')
 
@@ -198,8 +199,40 @@ class AppsDataStore {
             })
     }
 
+    nameAllowedOrThrow(appName: string) {
+        if (!isNameAllowed(appName)) {
+            throw ApiStatusCodes.createError(
+                ApiStatusCodes.STATUS_ERROR_BAD_NAME,
+                'App Name is not allow. Only lowercase letters and single hyphen is allow'
+            )
+        }
+    }
+
+    renameApp(oldAppName: string, newAppName: string) {
+        const self = this
+
+        return Promise.resolve()
+            .then(function() {
+                self.nameAllowedOrThrow(newAppName)
+                return self.getAppDefinition(oldAppName)
+            })
+            .then(function(appData) {
+                if (appData.appName) appData.appName = newAppName
+                appData.hasDefaultSubDomainSsl = false
+                self.data.delete(APP_DEFINITIONS + '.' + oldAppName)
+                self.saveApp(newAppName, appData)
+            })
+            .then(function() {
+                Utils.getDelayedPromise(2000)
+            })
+    }
+
     getServiceName(appName: string) {
         return 'srv-' + this.namepace + '--' + appName
+    }
+
+    getVolumeName(volumeName: string) {
+        return this.namepace + '--' + volumeName
     }
 
     getAppDefinitions() {
@@ -244,7 +277,7 @@ class AppsDataStore {
                     }
                 }
             })
-            resolve(allAppsUnencrypted)
+            resolve(JSON.parse(JSON.stringify(allAppsUnencrypted)))
         })
     }
 
@@ -489,6 +522,12 @@ class AppsDataStore {
         const self = this
 
         return this.getAppDefinition(appName).then(function(app) {
+            // Drop older versions
+            app.versions = Utils.dropFirstElements(
+                app.versions,
+                CaptainConstants.configs.maxVersionHistory - 1
+            )
+
             const versions = app.versions
 
             let newVersionIndex = versions.length
@@ -537,6 +576,7 @@ class AppsDataStore {
 
     updateAppDefinitionInDb(
         appName: string,
+        description: string,
         instanceCount: number,
         captainDefinitionRelativeFilePath: string,
         envVars: IAppEnvVar[],
@@ -544,12 +584,14 @@ class AppsDataStore {
         nodeId: string,
         notExposeAsWebApp: boolean,
         containerHttpPort: number,
+        httpAuth: IHttpAuth | undefined,
         forceSsl: boolean,
         ports: IAppPort[],
         repoInfo: RepoInfo,
         authenticator: Authenticator,
         customNginxConfig: string,
-        preDeployFunction: string
+        preDeployFunction: string,
+        websocketSupport: boolean
     ) {
         const self = this
         let appObj: IAppDef
@@ -617,9 +659,28 @@ class AppsDataStore {
                 appObj.notExposeAsWebApp = !!notExposeAsWebApp
                 appObj.containerHttpPort = containerHttpPort
                 appObj.forceSsl = !!forceSsl
+                appObj.websocketSupport = !!websocketSupport
                 appObj.nodeId = nodeId
                 appObj.customNginxConfig = customNginxConfig
                 appObj.preDeployFunction = preDeployFunction
+                appObj.description = description
+
+                if (httpAuth && httpAuth.user) {
+                    const newAuth: IHttpAuth = {
+                        user: httpAuth.user + '',
+                        passwordHashed: httpAuth.passwordHashed + '',
+                    }
+
+                    if (httpAuth.password) {
+                        newAuth.passwordHashed = ApacheMd5.createApacheHash(
+                            httpAuth.password + ''
+                        )
+                    }
+
+                    appObj.httpAuth = newAuth
+                } else {
+                    appObj.httpAuth = undefined
+                }
 
                 if (ports) {
                     appObj.ports = []
@@ -719,6 +780,8 @@ class AppsDataStore {
 
             self.data.delete(APP_DEFINITIONS + '.' + appName)
             resolve()
+        }).then(function() {
+            Utils.getDelayedPromise(2000)
         })
     }
 
@@ -755,6 +818,7 @@ class AppsDataStore {
 
             const defaultAppDefinition: IAppDef = {
                 hasPersistentData: !!hasPersistentData,
+                description: '',
                 instanceCount: 1,
                 captainDefinitionRelativeFilePath:
                     CaptainConstants.defaultCaptainDefinitionPath,
@@ -768,6 +832,7 @@ class AppsDataStore {
                 customDomain: [],
                 hasDefaultSubDomainSsl: false,
                 forceSsl: false,
+                websocketSupport: false,
             }
 
             resolve(defaultAppDefinition)
@@ -775,7 +840,6 @@ class AppsDataStore {
             return self.saveApp(appName, app)
         })
     }
-
 }
 
 export = AppsDataStore

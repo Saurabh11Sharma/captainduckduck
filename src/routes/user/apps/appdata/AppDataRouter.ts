@@ -1,12 +1,8 @@
 import express = require('express')
-import BaseApi = require('../../api/BaseApi')
-import ApiStatusCodes = require('../../api/ApiStatusCodes')
-import Logger = require('../../utils/Logger')
+import BaseApi = require('../../../../api/BaseApi')
+import ApiStatusCodes = require('../../../../api/ApiStatusCodes')
 import multer = require('multer')
-import fs = require('fs-extra')
-import DataStore = require('../../datastore/DataStore')
-import ServiceManager = require('../../user/ServiceManager')
-import InjectionExtractor = require('../../injection/InjectionExtractor')
+import InjectionExtractor = require('../../../../injection/InjectionExtractor')
 
 const TEMP_UPLOAD = 'temp_upload/'
 const router = express.Router()
@@ -98,7 +94,7 @@ router.post('/:appName/', upload.single('sourceFile'), function(
     }
 
     Promise.resolve().then(function() {
-        const promiseToDeployNewVer = serviceManager.deployNewVersion(appName, {
+        const promiseToDeployNewVer = serviceManager.scheduleDeployNewVersion(appName, {
             uploadedTarPathSource: !!tarballSourceFilePath
                 ? {
                       uploadedTarPath: tarballSourceFilePath,

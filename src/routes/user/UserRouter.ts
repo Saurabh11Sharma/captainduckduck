@@ -1,17 +1,17 @@
 import express = require('express')
-import BaseApi = require('../api/BaseApi')
-import ApiStatusCodes = require('../api/ApiStatusCodes')
-import Injector = require('../injection/Injector')
+import BaseApi = require('../../api/BaseApi')
+import ApiStatusCodes = require('../../api/ApiStatusCodes')
+import Injector = require('../../injection/Injector')
 import SystemRouter = require('./system/SystemRouter')
 import AppsRouter = require('./apps/AppsRouter')
-import Logger = require('../utils/Logger')
-import RegistriesRouter = require('./RegistriesRouter')
+import Logger = require('../../utils/Logger')
+import RegistriesRouter = require('./registeries/RegistriesRouter')
 import onFinished = require('on-finished')
-import InjectionExtractor = require('../injection/InjectionExtractor')
-import CaptainManager = require('../user/system/CaptainManager')
-import Utils from '../utils/Utils'
-import EnvVars = require('../utils/EnvVars')
-import Authenticator = require('../user/Authenticator')
+import InjectionExtractor = require('../../injection/InjectionExtractor')
+import CaptainManager = require('../../user/system/CaptainManager')
+import Utils from '../../utils/Utils'
+import EnvVars = require('../../utils/EnvVars')
+import Authenticator = require('../../user/Authenticator')
 
 const router = express.Router()
 
@@ -68,21 +68,9 @@ router.use(function(req, res, next) {
         }
 
         if (threadLockNamespace[namespace]) {
-            let response = new BaseApi(
-                ApiStatusCodes.STATUS_ERROR_GENERIC,
-                'Another operation still in progress... please wait...'
-            )
-            res.send(response)
-            return
-        }
-
-        let activeBuildAppName = serviceManager.isAnyBuildRunning()
-        if (activeBuildAppName) {
-            let response = new BaseApi(
-                ApiStatusCodes.STATUS_ERROR_GENERIC,
-                `An active build (${activeBuildAppName}) is in progress... please wait...`
-            )
-            res.send(response)
+            // Changed to HTTP status code so that the webhook and 3rd party services can understand this.
+            res.status(429)
+            res.send('Another operation still in progress... please wait...')
             return
         }
 
