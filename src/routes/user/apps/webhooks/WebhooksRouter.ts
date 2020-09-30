@@ -1,12 +1,9 @@
 import express = require('express')
 import bodyParser = require('body-parser')
-import BaseApi = require('../../../../api/BaseApi')
-import Authenticator = require('../../../../user/Authenticator')
-import ApiStatusCodes = require('../../../../api/ApiStatusCodes')
-import Logger = require('../../../../utils/Logger')
-import CaptainConstants = require('../../../../utils/CaptainConstants')
-import ServiceManager = require('../../../../user/ServiceManager')
-import InjectionExtractor = require('../../../../injection/InjectionExtractor')
+import ApiStatusCodes from '../../../../api/ApiStatusCodes'
+import BaseApi from '../../../../api/BaseApi'
+import InjectionExtractor from '../../../../injection/InjectionExtractor'
+import Logger from '../../../../utils/Logger'
 
 const router = express.Router()
 
@@ -45,56 +42,71 @@ function getPushedBranches(req: express.Request) {
     return pushedBranches
 }
 
-router.post('/triggerbuild', urlencodedParser, function(req, res, next) {
-    // From this point on, we don't want to error out. Just do the build process in the background
-    res.send(
-        new BaseApi(ApiStatusCodes.STATUS_OK, 'Build webhook has triggered')
-    )
-
-    Promise.resolve()
-        .then(function() {
+router.post('/triggerbuild', urlencodedParser, function (req, res, next) {
+    return Promise.resolve()
+        .then(function () {
             const extracted = InjectionExtractor.extractAppAndUserForWebhook(
                 res
             )
-            let serviceManager = extracted.user.serviceManager
-            let namespace = extracted.user.namespace
-            let appName = extracted.appName
-            let app = extracted.app
+            const { serviceManager, namespace } = extracted.user
+            const { appName, app } = extracted
 
             if (!app || !serviceManager || !namespace || !appName) {
-                throw new Error(
-                    'Something went wrong during trigger build. Cannot extract app information from the payload.'
+                Logger.e(
+                    new Error(
+                        'Something went wrong during trigger build. Cannot extract app information from the payload.'
+                    )
                 )
+                throw new Error('Error triggering a build')
             }
 
-            const repoInfo = app.appPushWebhook!.repoInfo
-            // if we didn't detect branches, the POST might have come from another source that we don't
-            // explicitly support. Therefore, we just let it go through and triggers a build regardless.
+            // From this point on, we don't want to error out. Just do the build process in the background
+            res.send(
+                new BaseApi(
+                    ApiStatusCodes.STATUS_OK,
+                    'Build webhook has triggered'
+                )
+            )
 
-            const pushedBranches: string[] = getPushedBranches(req)
-            if (pushedBranches.length > 0) {
-                let branchIsTracked = false
+            Promise.resolve()
+                .then(function () {
+                    const repoInfo = app.appPushWebhook!.repoInfo
+                    // if we didn't detect branches, the POST might have come from another source that we don't
+                    // explicitly support. Therefore, we just let it go through and triggers a build regardless.
 
-                for (let i = 0; i < pushedBranches.length; i++) {
-                    if (pushedBranches[i] === repoInfo.branch) {
-                        branchIsTracked = true
-                        break
+                    const pushedBranches: string[] = getPushedBranches(req)
+                    if (pushedBranches.length > 0) {
+                        let branchIsTracked = false
+
+                        for (let i = 0; i < pushedBranches.length; i++) {
+                            if (pushedBranches[i] === repoInfo.branch) {
+                                branchIsTracked = true
+                                break
+                            }
+                        }
+
+                        // POST call was triggered due to another branch being pushed. We don't need to trigger the build.
+                        if (!branchIsTracked) {
+                            return
+                        }
                     }
-                }
 
-                // POST call was triggered due to another branch being pushed. We don't need to trigger the build.
-                if (!branchIsTracked) {
-                    return
-                }
-            }
-
-            return serviceManager.scheduleDeployNewVersion(appName, {
-                repoInfoSource: repoInfo,
-            })
+                    return serviceManager.scheduleDeployNewVersion(appName, {
+                        repoInfoSource: repoInfo,
+                    })
+                })
+                .catch(function (error) {
+                    Logger.e(error)
+                })
         })
-        .catch(function(error) {
-            Logger.e(error)
+        .catch(function (error) {
+            res.send(
+                new BaseApi(
+                    ApiStatusCodes.STATUS_ERROR_GENERIC,
+                    'Error triggering a build'
+                )
+            )
         })
 })
 
-export = router
+export default router

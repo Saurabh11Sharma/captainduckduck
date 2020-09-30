@@ -1,14 +1,15 @@
-# Contributing
+# Before Contributing
 
 When contributing to this repository, please first discuss the change you wish to make via issue,
-email, or any other method with the owners of this repository before making a change. The best way is our Slack channel:
-
-```
-https://join.slack.com/t/caprover/shared_invite/enQtNDEwMjc3MjcxNjUzLWQ4YjljN2JiMGU5Nzk5NjcwMDEzNDNiMTNkOTVhNTA4YTYwOThkNDkyMTlkMDFhMzAzOTA5YjcwY2E4NWRkYzk
-```
-
+email, or any other method with the owners of this repository before making a change. The best way is our Slack channel (link at the footer of CapRover.com)
 
 Please note we have a code of conduct, please follow it in all your interactions with the project.
+
+## IMPORTANT: CapRover Goals & Scope
+
+Since the birth of CapRover, there has been many contributions and suggestions that shaped CapRover as we know it today. One of the very important factor in the contribution you make is to stick with CapRover design philosophy.- CapRover is not an enterprise grade application like Kubernetes. *Do not* patch it with half-done features that make it look like one - it will eventually fail as we don't have resources to support such features.- CapRover scope is a helper around Docker, nginx and Let's Encrypt.
+
+The goal is to make the common use-cases exposed via simple controls on UI while allowing further customizations to be done through hooks and scripts. If a new feature is doable via the existing features, or a basic tool, do not add it to CapRover. We do not want to bloat this application. One example is: "Add a flag to customize the placement constraints of containers". This is definitely doable in Docker, but we don't want to mirror every single functionality of Docker to CapRover. If we do that, CapRover becomes a very hard to maintain project. Instead we should add customization hooks for these advanced and rare use cases. For example, instead of mirroring every single nginx config, we added the ability of customizing the nginx config for advanced users.- Last but not least AVOID LARGE PULL REQUESTS at all cost as they won't get reviewed unless they are discussed in the Slack channel beforehand.
 
 ## Pull Request Process
 
@@ -16,9 +17,10 @@ Please note we have a code of conduct, please follow it in all your interactions
    variables, exposed ports, useful file locations and container parameters.
 2. Make sure your commit comments are self explanatory.
 3. Discuss the changes you want to make beforehand.
-4. To keep the process simple with just a few contributors, development happens directly on the master branch
+4. Please avoid making opinion-based changes if it's just a code-style change - this includes, but not limited to, changes to how we work with promises, class inheritence and etc.
+5. To keep the process simple with just a few contributors, development happens directly on the master branch
    and releases will be deployed on the same branch.
-5. By creating a Pull Request, you agree to all terms in https://github.com/caprover/caprover/blob/master/contrib.md
+6. By creating a Pull Request, you agree to all terms in https://github.com/caprover/caprover/blob/master/contrib.md
    
 ## Running dev environment
 
@@ -28,10 +30,11 @@ or your local machine itself. Needless to say, Docker is required (same minimum 
 > Docker for Mac users: You need to add `/captain` to shared paths.  
 > To do so, click on the Docker icon -> Preferences -> File Sharing and add `/captain`
 
-Log in to your machine, clone the git repo, go to `app-backend` directory and run the following lines:
+Log in to your machine, clone the git repo and run the following lines:
 
 ```bash
 $   npm install
+$   npm run build
 $   ./dev-scripts/dev-clean-run-as-dev.sh
 ```
 You are good to go! You can run the following line to see the logs for the back-end service.
